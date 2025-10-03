@@ -150,20 +150,4 @@ router.get('/certificado/:cnpj', async (req, res) => {
   }
 });
 
-// ===============================
-// LISTAR EMPRESAS (DASHBOARD ADMIN)
-// ===============================
-router.get('/lista', async (req, res) => {
-  try {
-    const [rows] = await db.query(
-      "SELECT id, razao_social, cnpj, status_pagamento FROM empresas ORDER BY razao_social ASC"
-    );
-    res.json(rows);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Erro ao buscar empresas" });
-  }
-});
-
-
 module.exports = router;
