@@ -25,46 +25,40 @@ router.post('/upload-empresas', upload.single('arquivo'), async (req, res) => {
     const sheet = workbook.Sheets[sheetName];
     const data = xlsx.utils.sheet_to_json(sheet);
 
+    if (!data || data.length === 0) {
+      return res.status(400).json({ error: 'Planilha vazia' });
+    }
+
+    let count = 0;
+
     for (const row of data) {
-      // --- STATUS (aceita qualquer do ENUM atualizado) ---
       let status_pagamento = 'PENDENTE';
-      if (row['STATUS']) {
-        status_pagamento = row['STATUS'].toUpperCase().trim();
-      }
+      if (row['STATUS']) status_pagamento = row['STATUS'].toUpperCase().trim();
 
       const valor_bruto = row['VALOR BRUTO'] || null;
-
-      // Data de pagamento
       let data_pgto = null;
       if (row['DATA PGTO']) {
         const parsed = moment(row['DATA PGTO'], ['DD/MM/YYYY', 'YYYY-MM-DD'], true);
-        if (parsed.isValid()) {
-          data_pgto = parsed.format('YYYY-MM-DD');
-        }
+        if (parsed.isValid()) data_pgto = parsed.format('YYYY-MM-DD');
       }
 
       const recibo = row['RECIBO'] || null;
       const nota_fiscal = row['NOTA FISCAL'] || null;
-
-      // Carimbo de data/hora
       let carimbo_data_hora = null;
       if (row['Carimbo de data/hora']) {
         const parsedCarimbo = moment(row['Carimbo de data/hora'], ['DD/MM/YYYY HH:mm', 'YYYY-MM-DD HH:mm:ss'], true);
-        if (parsedCarimbo.isValid()) {
-          carimbo_data_hora = parsedCarimbo.format('YYYY-MM-DD HH:mm:ss');
-        }
+        if (parsedCarimbo.isValid()) carimbo_data_hora = parsedCarimbo.format('YYYY-MM-DD HH:mm:ss');
       }
 
       const nome_scaleup = row['Nome da Scaleup'] || null;
       const razao_social = row['Razão Social:'] || null;
 
-      // --- CNPJ (garante string, remove caracteres e corta em 14 dígitos) ---
       let cnpj = null;
       if (row['CNPJ:']) {
-        cnpj = String(row['CNPJ:']).replace(/\D/g, '');
-        if (cnpj.length > 14) {
-          cnpj = cnpj.substring(0, 14);
-        }
+        cnpj = String(row['CNPJ:']).replace(/\D/g, '').substring(0, 14);
+      }
+      if (!cnpj) {
+        return res.status(400).json({ error: "Erro: Linha com CNPJ inválido encontrada. Upload cancelado." });
       }
 
       const endereco = row['Endereço Completo (Logradouro, nº, Bairro, Cidade / UF e CEP)'] || null;
@@ -113,12 +107,37 @@ router.post('/upload-empresas', upload.single('arquivo'), async (req, res) => {
       ];
 
       await db.query(sql, values);
+      count++;
     }
+
+    // Salvar no histórico
+    await db.query(
+  `INSERT INTO historico_uploads (arquivo_nome, quantidade_empresas) VALUES (?, ?)`,
+  [req.file.originalname, count]
+);
+
 
     res.json({ message: 'Planilha importada com sucesso!' });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Erro ao processar planilha' });
+  }
+});
+
+/**
+ * ===============================
+ * HISTÓRICO DE UPLOADS
+ * ===============================
+ */
+router.get('/historico', async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      "SELECT * FROM historico_uploads ORDER BY data_upload DESC LIMIT 50"
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Erro ao buscar histórico' });
   }
 });
 
@@ -132,13 +151,9 @@ router.get('/certificado/:cnpj', async (req, res) => {
     const { cnpj } = req.params;
     const [rows] = await db.query("SELECT * FROM empresas WHERE cnpj = ?", [cnpj]);
 
-    if (!rows.length) {
-      return res.status(404).json({ error: "Empresa não encontrada" });
-    }
-
+    if (!rows.length) return res.status(404).json({ error: "Empresa não encontrada" });
     const empresa = rows[0];
 
-    // Mesmo que tenha outros status no ENUM, só libera se for PAGO
     if (empresa.status_pagamento !== 'PAGO') {
       return res.status(403).json({ error: "Pagamento não confirmado" });
     }
